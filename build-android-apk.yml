@@ -1,0 +1,215 @@
+name: 构建Android APK
+
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '应用版本号'
+        required: false
+        default: '2.0'
+  
+  # 推送到main分支时触发
+  push:
+    branches: [ main, master ]
+    paths:
+      - '归藏解密_安卓App.py'
+      - 'crypto_utils.py'
+      - 'buildozer.spec'
+      - '.github/workflows/build-android-apk.yml'
+  
+  # Pull request时触发
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-apk:
+    name: 编译APK
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 🐍 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk \
+            autoconf libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev libtinfo-dev \
+            cmake libffi-dev libssl-dev \
+            build-essential ccache
+          
+          # 设置Java环境变量
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
+      
+      - name: 📦 安装Python依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install buildozer cython
+      
+      - name: 💾 缓存Buildozer目录
+        uses: actions/cache@v4
+        with:
+          path: |
+            .buildozer
+            ~/.buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-
+      
+      - name: 🔧 配置Buildozer
+        run: |
+          # 创建必要的目录
+          mkdir -p ~/.buildozer/android/platform
+          
+          # 接受Android许可
+          mkdir -p ~/.android
+          echo "count=0" > ~/.android/repositories.cfg
+      
+      - name: 🏗️ 编译Debug APK
+        run: |
+          # 增加权限
+          chmod +x ~/.buildozer/android/platform/*/gradlew 2>/dev/null || true
+          
+          # 开始编译
+          buildozer -v android debug
+      
+      - name: 📝 重命名APK
+        run: |
+          # 获取版本号
+          VERSION="${{ github.event.inputs.version || '2.0' }}"
+          
+          # 找到生成的APK
+          APK_FILE=$(find bin -name "*.apk" | head -n 1)
+          
+          if [ -n "$APK_FILE" ]; then
+            # 重命名
+            NEW_NAME="bin/归藏解密-v${VERSION}-debug.apk"
+            mv "$APK_FILE" "$NEW_NAME"
+            echo "APK_PATH=$NEW_NAME" >> $GITHUB_ENV
+            
+            # 显示文件信息
+            ls -lh "$NEW_NAME"
+            echo "✅ APK已生成: $NEW_NAME"
+          else
+            echo "❌ 未找到APK文件"
+            exit 1
+          fi
+      
+      - name: 📤 上传APK为Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guizang-decrypt-apk
+          path: ${{ env.APK_PATH }}
+          retention-days: 30
+      
+      - name: 📊 生成构建报告
+        run: |
+          echo "## 📱 APK构建完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 文件信息" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **文件名**: $(basename ${{ env.APK_PATH }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **大小**: $(du -h ${{ env.APK_PATH }} | cut -f1)" >> $GITHUB_STEP_SUMMARY
+          echo "- **版本**: ${{ github.event.inputs.version || '2.0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 下载APK" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. 点击上方的 **Artifacts** 查看构建产物" >> $GITHUB_STEP_SUMMARY
+          echo "2. 下载 \`guizang-decrypt-apk\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. 解压后得到APK文件" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📱 安装说明" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. 将APK传输到Android设备" >> $GITHUB_STEP_SUMMARY
+          echo "2. 允许\"未知来源\"安装" >> $GITHUB_STEP_SUMMARY
+          echo "3. 点击APK安装" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✨ 功能特性" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ AES-256加密解密" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ 100%兼容Python版本" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ 完全离线运行" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ 原生Android应用" >> $GITHUB_STEP_SUMMARY
+      
+      - name: 🎉 完成
+        run: |
+          echo "════════════════════════════════════════"
+          echo "✅ APK编译完成！"
+          echo "════════════════════════════════════════"
+          echo ""
+          echo "文件: ${{ env.APK_PATH }}"
+          echo "大小: $(du -h ${{ env.APK_PATH }} | cut -f1)"
+          echo ""
+          echo "下载位置: Actions → Artifacts"
+          echo "════════════════════════════════════════"
+
+  # 可选: 创建Release
+  create-release:
+    name: 创建Release
+    needs: build-apk
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 下载APK
+        uses: actions/download-artifact@v4
+        with:
+          name: guizang-decrypt-apk
+      
+      - name: 🏷️ 创建Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.version || '2.0' }}
+          name: 归藏解密 v${{ github.event.inputs.version || '2.0' }}
+          body: |
+            ## 🎉 归藏解密 Android版本发布
+            
+            ### 📦 下载
+            
+            - **APK文件**: 见下方Assets
+            - **版本**: v${{ github.event.inputs.version || '2.0' }}
+            - **平台**: Android 5.0+
+            
+            ### ✨ 功能特性
+            
+            - ✅ AES-256军用级加密
+            - ✅ 100%兼容Python版本
+            - ✅ 完全离线运行
+            - ✅ 图形界面
+            - ✅ 支持密码保护
+            - ✅ 自动识别格式
+            
+            ### 📱 安装说明
+            
+            1. 下载APK文件
+            2. 传输到Android设备
+            3. 允许"未知来源"安装
+            4. 点击安装
+            
+            ### ⚠️ 注意事项
+            
+            - 需要Android 5.0或更高版本
+            - 需要存储权限
+            - Debug版本，未经过应用商店审核
+            
+            ### 🔐 安全说明
+            
+            - 所有操作在本地进行
+            - 数据不上传
+            - 开源可审查
+          files: |
+            *.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
